@@ -1,0 +1,101 @@
+{
+  "name": "ai-markdown-renderer",
+  "version": "0.1.0",
+  "description": "A fast, streaming-first markdown renderer for AI applications. O(n) incremental parsing, graceful incomplete syntax handling, math support, and a React adapter.",
+  "keywords": [
+    "markdown",
+    "streaming",
+    "ai",
+    "llm",
+    "katex",
+    "math",
+    "react",
+    "renderer"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.mjs",
+      "require": "./dist/core/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/adapters/react/index.d.ts",
+      "import": "./dist/adapters/react/index.mjs",
+      "require": "./dist/adapters/react/index.cjs"
+    },
+    "./presets/standard": {
+      "types": "./dist/presets/standard.d.ts",
+      "import": "./dist/presets/standard.mjs",
+      "require": "./dist/presets/standard.cjs"
+    },
+    "./presets/full": {
+      "types": "./dist/presets/full.d.ts",
+      "import": "./dist/presets/full.mjs",
+      "require": "./dist/presets/full.cjs"
+    },
+    "./plugins/syntax-highlight": {
+      "types": "./dist/plugins/syntax-highlight/index.d.ts",
+      "import": "./dist/plugins/syntax-highlight/index.mjs",
+      "require": "./dist/plugins/syntax-highlight/index.cjs"
+    },
+    "./plugins/math": {
+      "types": "./dist/plugins/math/index.d.ts",
+      "import": "./dist/plugins/math/index.mjs",
+      "require": "./dist/plugins/math/index.cjs"
+    },
+    "./plugins/code-block": {
+      "types": "./dist/plugins/code-block/index.d.ts",
+      "import": "./dist/plugins/code-block/index.mjs",
+      "require": "./dist/plugins/code-block/index.cjs"
+    },
+    "./plugins/thinking": {
+      "types": "./dist/plugins/thinking/index.d.ts",
+      "import": "./dist/plugins/thinking/index.mjs",
+      "require": "./dist/plugins/thinking/index.cjs"
+    },
+    "./styles": "./dist/styles/default.css"
+  },
+  "main": "./dist/core/index.cjs",
+  "module": "./dist/core/index.mjs",
+  "types": "./dist/core/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "publint"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/react": "^18.3.0",
+    "highlight.js": "^11.10.0",
+    "katex": "^0.16.11",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "highlight.js": ">=11",
+    "katex": ">=0.16",
+    "react": ">=18",
+    "shiki": ">=1.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "katex": { "optional": true },
+    "highlight.js": { "optional": true },
+    "shiki": { "optional": true }
+  }
+}
