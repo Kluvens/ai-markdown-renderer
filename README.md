@@ -1,80 +1,413 @@
 # ai-markdown-renderer
 
-A streaming-first markdown renderer built for AI applications. While libraries like `react-markdown` re-parse the entire document on every token (O(n²)), `ai-markdown-renderer` uses an O(n) incremental approach — committed blocks are rendered once and never touched again. Only the current partial block (~100 chars) is re-processed per token.
+A streaming-first markdown renderer built for AI chat interfaces. Drop it in, feed it tokens, get live-rendered output — no flickering, no layout shift, no full re-renders.
 
-**34× faster** than naive re-parse at 50 paragraphs. **171× faster** at 200 paragraphs. The gap grows with document length.
-
----
-
-## Features
-
-- **O(n) streaming** — custom block splitter maintains parse state across chunk boundaries
-- **Zero-boilerplate React API** — `<AIMarkdown stream={...} />` just works
-- **Math support** — KaTeX inline `$...$` and block `$$...$$`, no blink during streaming
-- **`<think>` block support** — renders Claude / DeepSeek / QwQ reasoning as a collapsible `<details>`
-- **Syntax highlighting** — highlight.js or Shiki adapter
-- **AI-aware code blocks** — language badge, line count, copy button, auto-detection
-- **Streaming UX** — animated placeholder for in-progress math blocks, pulse on streaming tables, bouncing dots during thinking
-- **Plugin system** — `before-commit`, `after-render`, `on-flush` hooks + markdown-it plugin registration
-- **No leaked styles** — all CSS scoped to `.ai-markdown`, zero global side effects
-- **SSR safe** — style injection skipped when `document` is unavailable
-- **TypeScript** — full types, ships ESM + CJS + `.d.ts`
-
----
-
-## Installation
-
-```bash
+```
 npm install ai-markdown-renderer
 ```
 
-Peer dependencies (install what you need):
+---
 
-```bash
-npm install katex          # for math
-npm install highlight.js   # for syntax highlighting
-```
+## The problem with existing solutions
+
+Most markdown libraries were designed for static content. When used with LLM streams, they re-parse and re-render the entire document on every token. At 50 tokens/second over a 2 000-token response, that is 100 000 parse operations.
+
+`ai-markdown-renderer` processes each character **once**. Completed blocks are committed to the DOM with `innerHTML +=` and never touched again. Only the current partial block (~100 chars) is re-processed per token.
+
+| | ai-markdown-renderer | react-markdown |
+|---|---|---|
+| Streaming architecture | O(n) — committed blocks never re-render | O(n²) — full re-parse each token |
+| Speedup at 50 paragraphs | **~30×** faster | baseline |
+| Speedup at 200 paragraphs | **~150×** faster | baseline |
+| Live speculative preview | Yes — partial blocks shown as they type | No |
+| `<think>` / reasoning blocks | Built-in plugin | Not supported |
+| Custom HTML block tags | Yes (`<sources>`, `<artifacts>`, …) | No |
+| Default styles | Included, opt-in | None |
 
 ---
 
 ## Quick start
 
-### React
+### Static render
 
-```jsx
-import { AIMarkdown } from 'ai-markdown-renderer/react';
-
-// Static content — wrap pattern
-<AIMarkdown className="ai-markdown">{markdownText}</AIMarkdown>
-
-// Static content — prop pattern
-<AIMarkdown className="ai-markdown" content={markdownText} />
-
-// Streaming — hand it any AsyncIterable<string>
-<AIMarkdown className="ai-markdown" stream={llmStream} />
-```
-
-Styles are automatically injected when you import the React adapter. Add `className="ai-markdown"` to opt in to the default styles.
-
-### Vanilla JS
-
-```js
+```ts
 import { renderMarkdown } from 'ai-markdown-renderer';
 
-document.getElementById('output').innerHTML = renderMarkdown(markdownText);
+document.getElementById('output').innerHTML = renderMarkdown('# Hello\n\nThis is **markdown**.');
 ```
 
-### Streaming (vanilla)
+### React — static
 
-```js
+```tsx
+import { AIMarkdown } from 'ai-markdown-renderer/react';
+
+<AIMarkdown className="ai-markdown">{markdownString}</AIMarkdown>
+```
+
+### React — streaming from OpenAI
+
+```tsx
+import { AIMarkdown } from 'ai-markdown-renderer/react';
+
+async function* streamResponse(prompt: string) {
+  const stream = await openai.chat.completions.create({
+    model: 'gpt-4o', messages: [{ role: 'user', content: prompt }], stream: true,
+  });
+  for await (const chunk of stream) {
+    const text = chunk.choices[0]?.delta?.content ?? '';
+    if (text) yield text;
+  }
+}
+
+function Response({ prompt }: { prompt: string }) {
+  const stream = useMemo(() => streamResponse(prompt), [prompt]);
+  return (
+    <AIMarkdown
+      className="ai-markdown"
+      stream={stream}
+      onComplete={(html) => console.log('done')}
+    />
+  );
+}
+```
+
+### React — streaming from Anthropic
+
+```tsx
+async function* streamResponse(prompt: string) {
+  const stream = await anthropic.messages.stream({
+    model: 'claude-opus-4-6', max_tokens: 4096,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  for await (const chunk of stream) {
+    if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+      yield chunk.delta.text;
+    }
+  }
+}
+```
+
+---
+
+## Styling
+
+### Auto-inject (React)
+
+When you import from `ai-markdown-renderer/react`, the default stylesheet is injected automatically. Add `className="ai-markdown"` to your wrapper:
+
+```tsx
+<AIMarkdown className="ai-markdown" stream={stream} />
+```
+
+### Manual import (vanilla JS / other frameworks)
+
+```ts
+import 'ai-markdown-renderer/styles';
+```
+
+or in HTML:
+
+```html
+<link rel="stylesheet" href="node_modules/ai-markdown-renderer/dist/styles/default.css" />
+```
+
+### Theme with CSS variables
+
+All styles are scoped to `.ai-markdown` and driven by custom properties. Override any variable to match your design:
+
+```css
+.ai-markdown {
+  --ai-md-font:    'Inter', system-ui, sans-serif;
+  --ai-md-mono:    'JetBrains Mono', monospace;
+  --ai-md-text:    #1a1a1a;
+  --ai-md-muted:   #737373;
+  --ai-md-subtle:  #a3a3a3;
+  --ai-md-border:  #e5e7eb;
+  --ai-md-surface: #f9fafb;
+  --ai-md-radius:  8px;
+}
+```
+
+### Custom React components
+
+Replace any HTML element with your own component — the same API as react-markdown:
+
+```tsx
+import { AIMarkdown, type MarkdownComponents } from 'ai-markdown-renderer/react';
+
+const components: MarkdownComponents = {
+  h1: ({ children }) => <h1 className="text-3xl font-bold">{children}</h1>,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener" className="text-blue-600 underline">
+      {children}
+    </a>
+  ),
+  code: ({ className, children }) => {
+    const lang = /language-(\w+)/.exec(className ?? '')?.[1];
+    return lang
+      ? <SyntaxBlock lang={lang}>{children}</SyntaxBlock>
+      : <code className="bg-gray-100 px-1 rounded text-sm">{children}</code>;
+  },
+};
+
+<AIMarkdown content={markdown} components={components} />
+```
+
+---
+
+## Plugins
+
+### Math — KaTeX
+
+Renders `$inline$` and `$$block$$` LaTeX. Shows a pulsing placeholder while a block formula is streaming to prevent KaTeX error flashes on incomplete input.
+
+```bash
+npm install katex
+```
+
+```tsx
+import { createMathPlugin } from 'ai-markdown-renderer/plugins/math';
+
+<AIMarkdown
+  className="ai-markdown"
+  stream={stream}
+  plugins={[createMathPlugin()]}
+/>
+```
+
+```html
+<!-- Include the KaTeX stylesheet -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css" />
+```
+
+Options:
+
+```ts
+createMathPlugin({
+  katexOptions: {
+    macros: { '\\RR': '\\mathbb{R}' },
+    throwOnError: false,
+    output: 'html',
+  },
+})
+```
+
+---
+
+### Thinking blocks — `<think>`
+
+Renders reasoning traces produced by models like Claude, DeepSeek, and QwQ. Shows animated dots while thinking is in progress; collapses into a `<details>` summary when the block completes.
+
+```tsx
+import { createThinkingPlugin } from 'ai-markdown-renderer/plugins/thinking';
+
+<AIMarkdown
+  className="ai-markdown"
+  stream={stream}
+  plugins={[createThinkingPlugin({ headerLabel: 'Reasoning' })]}
+/>
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `headerLabel` | `string` | `'Thinking'` | Text shown in the collapsed summary |
+| `defaultOpen` | `boolean` | `false` | Start the block expanded |
+| `classPrefix` | `string` | `'ai-thinking'` | CSS class prefix for all generated elements |
+
+---
+
+### Code blocks
+
+Wraps fenced code in a header bar with language badge, line count, and a one-click copy button. Syntax highlighting via highlight.js (loaded from `window.hljs`) when available.
+
+```tsx
+import { createCodeBlockPlugin } from 'ai-markdown-renderer/plugins/code-block';
+
+<AIMarkdown
+  className="ai-markdown"
+  stream={stream}
+  plugins={[createCodeBlockPlugin()]}
+/>
+```
+
+| Option | Type | Default |
+|--------|------|---------|
+| `showLanguage` | `boolean` | `true` |
+| `showLineCount` | `boolean` | `true` |
+| `showCopyButton` | `boolean` | `true` |
+| `copyLabel` | `string` | `'Copy'` |
+| `copiedLabel` | `string` | `'Copied!'` |
+
+---
+
+### Syntax highlighting (advanced)
+
+For full control over the highlighter — Shiki with VS Code themes, Prism, or a custom adapter:
+
+```ts
+import {
+  createSyntaxHighlightPlugin,
+  createHighlightJsAdapter,
+  createShikiAdapter,
+} from 'ai-markdown-renderer/plugins/syntax-highlight';
+
+// highlight.js — synchronous, ~30 KB gzipped
+const plugin = createSyntaxHighlightPlugin({
+  adapter: createHighlightJsAdapter(),
+});
+
+// Shiki — async, VS Code-quality themes
+const plugin = createSyntaxHighlightPlugin({
+  adapter: createShikiAdapter({ theme: 'github-dark' }),
+});
+```
+
+Bring your own highlighter:
+
+```ts
+import type { HighlightAdapter } from 'ai-markdown-renderer';
+
+const myAdapter: HighlightAdapter = {
+  highlight(code, lang) {
+    return myHighlighter.highlight(code, { language: lang }).value ?? null;
+  },
+  async load() {
+    await myHighlighter.init();
+  },
+};
+```
+
+---
+
+## Presets
+
+Presets are convenience constructors that bundle common plugin combinations.
+
+### Standard — syntax highlighting only
+
+```ts
+import { createStandardRenderer } from 'ai-markdown-renderer/presets/standard';
+
+const renderer = createStandardRenderer();
+```
+
+### Full — syntax highlighting + math
+
+```ts
+import { createFullRenderer } from 'ai-markdown-renderer/presets/full';
+
+const renderer = createFullRenderer({
+  math: { katexOptions: { macros: { '\\N': '\\mathbb{N}' } } },
+  extraPlugins: [myPlugin],
+});
+```
+
+---
+
+## Custom block tags
+
+Register arbitrary HTML tag names as **atomic blocks**. The entire `<tag>…</tag>` is buffered as a single unit — blank lines inside will not trigger an early commit. This is how `<sources>` panels, `<artifacts>`, and other LLM-specific constructs are handled.
+
+```tsx
+// Via renderer options
+const renderer = new MarkdownRenderer({
+  customBlockTags: ['sources', 'artifacts'],
+});
+
+// Via AIMarkdown
+<AIMarkdown
+  stream={stream}
+  customBlockTags={['sources', 'artifacts']}
+/>
+
+// Or declare inside a plugin so the tag ships with it
+const sourcesPlugin: Plugin = {
+  name: 'sources',
+  customBlockTags: ['sources'],
+  hooks: {
+    'after-render'(html) {
+      return html.replace(
+        /<sources>([\s\S]*?)<\/sources>/,
+        '<aside class="sources">$1</aside>',
+      );
+    },
+  },
+};
+```
+
+---
+
+## Writing a plugin
+
+The plugin API exposes three pipeline hooks and the ability to register markdown-it rules:
+
+```ts
+import type { Plugin } from 'ai-markdown-renderer';
+
+const calloutPlugin: Plugin = {
+  name: 'callout',
+
+  // Runs just before a completed block is passed to markdown-it.
+  // state.mode tells you the block type: 'paragraph', 'code-fence', etc.
+  // Return the (possibly transformed) raw markdown string.
+  hooks: {
+    'before-commit'(rawBlock, state) {
+      return rawBlock.replace(/^:::(\w+)\n([\s\S]*?):::/m, (_, type, body) =>
+        `<div class="callout callout-${type}">\n\n${body}\n\n</div>`,
+      );
+    },
+
+    // Runs after markdown-it renders a block to HTML.
+    // Return the (possibly transformed) HTML string.
+    'after-render'(html, rawBlock) {
+      return html.replace(/<table>/g, '<table class="data-table">');
+    },
+
+    // Runs once when flush() is called.
+    'on-flush'() {
+      analytics.track('stream_complete');
+    },
+  },
+
+  // Register markdown-it plugins — called once at construction.
+  markdownItPlugins: [
+    (md) => {
+      // md is the MarkdownIt instance; add rules, override renderers, etc.
+      md.renderer.rules.image = (tokens, idx) => `<img ...>`;
+    },
+  ],
+
+  // HTML tags to buffer as atomic blocks.
+  customBlockTags: ['callout'],
+};
+```
+
+---
+
+## Vanilla JS
+
+```ts
 import { MarkdownRenderer } from 'ai-markdown-renderer';
+import { createCodeBlockPlugin } from 'ai-markdown-renderer/plugins/code-block';
+import { createMathPlugin } from 'ai-markdown-renderer/plugins/math';
+import { createThinkingPlugin } from 'ai-markdown-renderer/plugins/thinking';
+import 'ai-markdown-renderer/styles';
 
-const renderer = new MarkdownRenderer();
-const committed = document.getElementById('committed');
+const renderer = new MarkdownRenderer({
+  plugins: [
+    createThinkingPlugin(),
+    createCodeBlockPlugin(),
+    createMathPlugin(),
+  ],
+});
+
+const committed   = document.getElementById('committed');
 const speculative = document.getElementById('speculative');
 
 renderer.on('delta', ({ appendHtml, speculativeHtml }) => {
-  committed.innerHTML += appendHtml;
+  // appendHtml: newly committed block — append once, never re-render
+  if (appendHtml) committed.innerHTML += appendHtml;
+  // speculativeHtml: current partial block — replace on every token
   speculative.innerHTML = speculativeHtml;
 });
 
@@ -82,237 +415,50 @@ renderer.on('flush', () => {
   speculative.innerHTML = '';
 });
 
-// Feed tokens as they arrive
-renderer.push(chunk);
-// ...
-renderer.flush(); // call when stream ends
-```
+renderer.on('error', (err) => console.error(err));
 
----
-
-## Streaming with OpenAI
-
-```jsx
-import { AIMarkdown } from 'ai-markdown-renderer/react';
-import OpenAI from 'openai';
-
-const client = new OpenAI();
-
-async function* streamTokens() {
-  const stream = await client.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [{ role: 'user', content: 'Explain quantum entanglement' }],
-    stream: true,
-  });
-  for await (const chunk of stream) {
-    const token = chunk.choices[0]?.delta?.content;
-    if (token) yield token;
-  }
+// Feed tokens from any source
+for await (const chunk of llmStream) {
+  renderer.push(chunk);
 }
-
-export default function App() {
-  const [stream, setStream] = useState(null);
-
-  return (
-    <>
-      <button onClick={() => setStream(streamTokens())}>Ask</button>
-      {stream && (
-        <AIMarkdown
-          className="ai-markdown"
-          stream={stream}
-          onComplete={(html) => console.log('done')}
-        />
-      )}
-    </>
-  );
-}
-```
-
----
-
-## Plugins
-
-### Math (KaTeX)
-
-```jsx
-import { createMathPlugin } from 'ai-markdown-renderer/plugins/math';
-
-const plugins = [createMathPlugin()];
-
-<AIMarkdown className="ai-markdown" content={text} plugins={plugins} />
-```
-
-Renders `$E = mc^2$` inline and `$$...$$` as display math. While a block math formula is still streaming, a pulsing placeholder is shown instead of a KaTeX error flash.
-
-### Syntax highlighting
-
-```jsx
-import { createSyntaxHighlightPlugin, createHighlightJsAdapter } from 'ai-markdown-renderer/plugins/syntax-highlight';
-
-const plugins = [
-  createSyntaxHighlightPlugin({ adapter: createHighlightJsAdapter() }),
-];
-```
-
-### AI-aware code blocks
-
-Adds a language badge, line count, and copy button to every code fence. Auto-detects language when not specified.
-
-```jsx
-import { createCodeBlockPlugin } from 'ai-markdown-renderer/plugins/code-block';
-
-const plugins = [
-  createCodeBlockPlugin({
-    showCopyButton: true,   // default: true
-    showLanguage: true,     // default: true
-    showLineCount: true,    // default: true
-    copyLabel: 'Copy',
-    copiedLabel: 'Copied!',
-  }),
-];
-```
-
-### Thinking blocks (`<think>`)
-
-Renders `<think>...</think>` blocks (Claude extended thinking, DeepSeek R1, QwQ) as a collapsible `<details>` element. While the block is still streaming, animated dots are shown.
-
-```jsx
-import { createThinkingPlugin } from 'ai-markdown-renderer/plugins/thinking';
-
-const plugins = [
-  createThinkingPlugin({
-    headerLabel: 'Thinking',  // default: 'Thinking'
-    defaultOpen: false,        // default: false
-  }),
-];
-```
-
-### All plugins together
-
-```jsx
-import { createThinkingPlugin } from 'ai-markdown-renderer/plugins/thinking';
-import { createMathPlugin } from 'ai-markdown-renderer/plugins/math';
-import { createCodeBlockPlugin } from 'ai-markdown-renderer/plugins/code-block';
-import { createSyntaxHighlightPlugin, createHighlightJsAdapter } from 'ai-markdown-renderer/plugins/syntax-highlight';
-
-// Define outside component (or useMemo) to keep array reference stable
-const plugins = [
-  createThinkingPlugin(),
-  createMathPlugin(),
-  createCodeBlockPlugin(),
-  createSyntaxHighlightPlugin({ adapter: createHighlightJsAdapter() }),
-];
-
-<AIMarkdown className="ai-markdown" stream={stream} plugins={plugins} />
-```
-
----
-
-## Presets
-
-If you don't want to wire up plugins manually:
-
-```js
-// highlight.js syntax highlighting included
-import { createStandardRenderer } from 'ai-markdown-renderer/presets/standard';
-
-// highlight.js + KaTeX math included
-import { createFullRenderer } from 'ai-markdown-renderer/presets/full';
-
-const renderer = createFullRenderer();
-renderer.on('delta', ({ appendHtml, speculativeHtml }) => { /* ... */ });
-renderer.push(chunk);
 renderer.flush();
 ```
 
----
-
-## Styling
-
-### Default styles (auto-injected)
-
-When you import `ai-markdown-renderer/react`, the default stylesheet is automatically injected into `<head>`. Add `className="ai-markdown"` to your wrapper to opt in:
-
-```jsx
-<AIMarkdown className="ai-markdown" content={text} />
-```
-
-All styles are scoped to `.ai-markdown` and use neutral black/grey/white — no colors imposed. Override via CSS custom properties:
-
-```css
-.ai-markdown {
-  --ai-md-font:    'Inter', system-ui, sans-serif;
-  --ai-md-mono:    'Fira Code', monospace;
-  --ai-md-text:    #111;
-  --ai-md-muted:   #666;
-  --ai-md-border:  #e0e0e0;
-  --ai-md-surface: #f5f5f5;
-  --ai-md-radius:  5px;
-}
-```
-
-### Manual stylesheet import
-
-If you prefer to manage the CSS yourself:
-
-```js
-import 'ai-markdown-renderer/styles';
-```
-
-Or copy `node_modules/ai-markdown-renderer/dist/styles/default.css` as a starting point.
-
----
-
-## Custom plugins
-
-```ts
-import type { Plugin } from 'ai-markdown-renderer';
-
-const myPlugin: Plugin = {
-  name: 'my-plugin',
-  hooks: {
-    // Transform raw block text before markdown-it sees it
-    'before-commit': (rawBlock, state) => {
-      return rawBlock.replace(/!!(.+?)!!/g, '<mark>$1</mark>');
-    },
-    // Transform rendered HTML after markdown-it
-    'after-render': (html, rawBlock) => {
-      return html.replace(/<table>/g, '<div class="table-wrap"><table>');
-    },
-    // Called once when flush() completes
-    'on-flush': () => {
-      console.log('stream done');
-    },
-  },
-  // Register markdown-it plugins
-  markdownItPlugins: [
-    (md) => { /* mutate the md instance */ },
-  ],
-};
+```html
+<div class="ai-markdown">
+  <div id="committed"></div>
+  <div id="speculative" style="opacity: 0.7"></div>
+</div>
 ```
 
 ---
 
-## React hook (advanced)
+## React hook
 
-For full manual control (e.g. feeding tokens from a WebSocket):
+`useMarkdownStream` exposes the renderer directly for advanced use cases — custom DOM strategies, virtual lists, or per-block animations:
 
-```jsx
+```tsx
 import { useMarkdownStream } from 'ai-markdown-renderer/react';
 
-function ChatMessage() {
+function StreamingResponse({ stream }: { stream: AsyncIterable<string> }) {
   const { committedRef, speculativeHtml, push, flush, isStreaming } = useMarkdownStream({
-    plugins: [...],
+    plugins: [createCodeBlockPlugin(), createMathPlugin()],
   });
+
+  useEffect(() => {
+    (async () => {
+      for await (const chunk of stream) push(chunk);
+      flush();
+    })();
+  }, [stream]);
 
   return (
     <div className="ai-markdown">
-      {/* Committed zone: injected via innerHTML, bypasses React reconciler */}
       <div ref={committedRef} />
-      {/* Speculative zone: only the current partial block, goes through React */}
-      {speculativeHtml && (
-        <div dangerouslySetInnerHTML={{ __html: speculativeHtml }} />
-      )}
+      <div
+        dangerouslySetInnerHTML={{ __html: speculativeHtml }}
+        style={{ opacity: isStreaming ? 0.7 : 1 }}
+      />
     </div>
   );
 }
@@ -320,113 +466,60 @@ function ChatMessage() {
 
 ---
 
-## Performance
-
-Measured against a naive approach that re-parses the full accumulated markdown on every token (equivalent to what react-markdown does on each state update):
-
-| Document size | Naive (react-markdown style) | ai-markdown-renderer | Speedup |
-|---|---|---|---|
-| 50 paragraphs | ~157ms | ~5ms | **34×** |
-| 200 paragraphs | ~1200ms | ~7ms | **171×** |
-| 1000 single-char pushes | — | 1.6ms total | — |
-
-The speedup grows with document length because the naive approach is O(n × tokens) while this library is O(tokens) — committed blocks are never re-parsed.
-
-**Why `react-markdown` is slow for streaming:**
-It passes the full markdown string through the remark → rehype → React pipeline on every render. At 50 tokens per second on a 500-word response, that means parsing the full 2500-character document 2500 times.
-
-**How this library avoids it:**
-The `StreamingBlockSplitter` detects block boundaries (blank lines, closing fences, `</think>`, etc.) in O(n) total. Once a block is committed, it's rendered by markdown-it once and its HTML is frozen. Only the current in-progress block (~100 chars) is re-rendered per token.
-
----
-
-## Comparison with react-markdown
-
-| | react-markdown | ai-markdown-renderer |
-|---|---|---|
-| Streaming support | ✗ | ✓ built-in |
-| Parsing complexity | O(n²) per stream | O(n) total |
-| `<think>` blocks | ✗ | ✓ |
-| Math blink prevention | ✗ | ✓ |
-| Streaming UX (placeholders) | ✗ | ✓ |
-| Custom components per tag | ✓ strong | hooks |
-| Plugin ecosystem | remark/rehype (large) | built-in plugins |
-| Bundle size (gzipped) | ~43KB | ~40KB |
-| SSR | ✓ | ✓ |
-
-Use `react-markdown` if you need deep custom component rendering (replacing every `<a>`, `<img>`, etc. with your own React components) or rely on the remark/rehype plugin ecosystem.
-
-Use `ai-markdown-renderer` for any AI chat UI, streaming responses, or performance-sensitive contexts.
-
----
-
 ## API reference
 
 ### `renderMarkdown(markdown, options?)`
 
-One-shot static render. Returns an HTML string.
-
-```ts
-import { renderMarkdown } from 'ai-markdown-renderer';
-const html = renderMarkdown('# Hello\n\n**world**');
-```
+One-shot synchronous render. Returns the full HTML string.
 
 ### `MarkdownRenderer`
 
-```ts
-const renderer = new MarkdownRenderer(options?: RendererOptions);
-
-renderer.push(chunk: string): void       // feed a token
-renderer.flush(): void                   // signal end of stream
-renderer.reset(): void                   // reuse for a new stream
-renderer.currentHtml: string             // committed + speculative HTML snapshot
-renderer.on('delta', (delta: RenderDelta) => void)
-renderer.on('flush', (finalHtml: string) => void)
-renderer.on('error', (err: Error) => void)
-
-MarkdownRenderer.render(markdown, options?): string  // static one-shot
-```
+| Member | Description |
+|--------|-------------|
+| `new MarkdownRenderer(options?)` | Create a renderer instance |
+| `.push(chunk)` | Feed the next text chunk |
+| `.flush()` | Signal end of stream; commits all remaining content |
+| `.reset()` | Reset to initial state for reuse |
+| `.currentHtml` | Full HTML at any point: committed + speculative |
+| `.speculativeHtml` | Only the in-progress trailing block |
+| `.on(event, handler)` | Subscribe to `delta`, `flush`, or `error` |
+| `.off(event, handler)` | Unsubscribe |
+| `MarkdownRenderer.render(markdown, options?)` | Static one-shot render (same as `renderMarkdown`) |
 
 ### `RendererOptions`
 
-```ts
-{
-  plugins?: Plugin[];
-  speculativeBufferLimit?: number;  // default: 8192 bytes
-  debounce?: number;                // ms, default: 0
-  markdownItOptions?: object;       // passed to markdown-it
-}
-```
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `plugins` | `Plugin[]` | `[]` | Plugins to apply |
+| `customBlockTags` | `string[]` | `[]` | HTML tag names to buffer atomically |
+| `speculativeBufferLimit` | `number` | `8192` | Force-commit if the buffer exceeds this many bytes |
+| `debounce` | `number` | `0` | Debounce `delta` events in milliseconds |
+| `markdownItOptions` | `object` | — | Options forwarded to the markdown-it constructor |
 
-### `<AIMarkdown>` props
+### `AIMarkdown` props
 
-```ts
-{
-  children?: string;                    // static markdown as children
-  content?: string;                     // static markdown as prop
-  stream?: AsyncIterable<string>;       // streaming source
-  className?: string;
-  style?: React.CSSProperties;
-  plugins?: Plugin[];
-  markdownItOptions?: object;
-  onComplete?: (html: string) => void;
-  onError?: (err: Error) => void;
-}
-```
+| Prop | Type | Description |
+|------|------|-------------|
+| `children` | `string` | Static markdown as JSX children |
+| `content` | `string` | Static markdown as a prop (takes precedence over `children`) |
+| `stream` | `AsyncIterable<string>` | Live streaming source |
+| `className` | `string` | CSS class on the outer `<div>` |
+| `style` | `CSSProperties` | Inline styles on the outer `<div>` |
+| `plugins` | `Plugin[]` | Plugins to enable |
+| `components` | `MarkdownComponents` | Custom React components per HTML tag |
+| `markdownItOptions` | `object` | Forwarded to markdown-it |
+| `onComplete` | `(html: string) => void` | Called when streaming finishes |
+| `onError` | `(err: Error) => void` | Called on stream error |
 
-### `Plugin`
+### `RenderDelta`
 
-```ts
-{
-  name: string;
-  hooks?: {
-    'before-commit'?: (rawBlock: string, state: ParseState) => string;
-    'after-render'?: (html: string, rawBlock: string) => string;
-    'on-flush'?: () => void;
-  };
-  markdownItPlugins?: Array<(md: object) => void>;
-}
-```
+Emitted on every `delta` event:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `appendHtml` | `string` | Newly committed HTML — append to the DOM once |
+| `speculativeHtml` | `string` | Current partial-block HTML — replace on every event |
+| `version` | `number` | Monotonically increasing, useful for ordering |
 
 ---
 
@@ -435,14 +528,14 @@ MarkdownRenderer.render(markdown, options?): string  // static one-shot
 | Import path | Contents |
 |---|---|
 | `ai-markdown-renderer` | `MarkdownRenderer`, `renderMarkdown`, all types |
-| `ai-markdown-renderer/react` | `AIMarkdown`, `MarkdownStream`, `useMarkdownStream` |
-| `ai-markdown-renderer/plugins/thinking` | `createThinkingPlugin` |
+| `ai-markdown-renderer/react` | `AIMarkdown`, `MarkdownStream`, `useMarkdownStream`, types |
 | `ai-markdown-renderer/plugins/math` | `createMathPlugin` |
+| `ai-markdown-renderer/plugins/thinking` | `createThinkingPlugin` |
 | `ai-markdown-renderer/plugins/code-block` | `createCodeBlockPlugin` |
-| `ai-markdown-renderer/plugins/syntax-highlight` | `createSyntaxHighlightPlugin`, adapters |
-| `ai-markdown-renderer/presets/standard` | `createStandardRenderer` (with highlight.js) |
-| `ai-markdown-renderer/presets/full` | `createFullRenderer` (highlight.js + KaTeX) |
-| `ai-markdown-renderer/styles` | Default CSS file (manual import) |
+| `ai-markdown-renderer/plugins/syntax-highlight` | `createSyntaxHighlightPlugin`, `createHighlightJsAdapter`, `createShikiAdapter` |
+| `ai-markdown-renderer/presets/standard` | `createStandardRenderer` |
+| `ai-markdown-renderer/presets/full` | `createFullRenderer` |
+| `ai-markdown-renderer/styles` | Default stylesheet (import side-effect) |
 
 ---
 
