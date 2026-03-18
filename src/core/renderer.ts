@@ -35,6 +35,7 @@ export class MarkdownRenderer {
       speculativeBufferLimit = 8192,
       debounce = 0,
       markdownItOptions = {},
+      customBlockTags = [],
     } = options;
 
     this.plugins = plugins;
@@ -59,9 +60,16 @@ export class MarkdownRenderer {
 
     this.speculativeRenderer = new SpeculativeRenderer(this.md, plugins);
 
+    // Merge customBlockTags from options + each plugin's declaration
+    const allCustomTags = [
+      ...customBlockTags,
+      ...plugins.flatMap((p) => p.customBlockTags ?? []),
+    ];
+
     this.splitter = new StreamingBlockSplitter(
       (rawBlock) => this.onBlockCommitted(rawBlock),
       speculativeBufferLimit,
+      allCustomTags,
     );
   }
 

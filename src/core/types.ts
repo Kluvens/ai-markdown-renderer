@@ -8,15 +8,16 @@
 // ---------------------------------------------------------------------------
 
 export type BlockMode =
-  | 'normal'       // between blocks, scanning for next construct
-  | 'paragraph'    // inside a paragraph (plain text block)
-  | 'atx-heading'  // # heading (single-line, auto-committed on newline)
-  | 'code-fence'   // inside ``` ... ``` or ~~~ ... ~~~
-  | 'math-block'   // inside $$ ... $$
-  | 'blockquote'   // inside > ... lines
-  | 'list'         // inside - / * / 1. list
-  | 'table'        // inside GFM table (| col | col |)
-  | 'think-block'; // inside <think> ... </think> (reasoning from Claude, DeepSeek, etc.)
+  | 'normal'        // between blocks, scanning for next construct
+  | 'paragraph'     // inside a paragraph (plain text block)
+  | 'atx-heading'   // # heading (single-line, auto-committed on newline)
+  | 'code-fence'    // inside ``` ... ``` or ~~~ ... ~~~
+  | 'math-block'    // inside $$ ... $$
+  | 'blockquote'    // inside > ... lines
+  | 'list'          // inside - / * / 1. list
+  | 'table'         // inside GFM table (| col | col |)
+  | 'think-block'   // inside <think> ... </think> (reasoning from Claude, DeepSeek, etc.)
+  | 'custom-block'; // inside a user-registered custom tag (e.g. <sources>, <artifacts>)
 
 export interface CodeFenceMeta {
   lang: string;
@@ -32,6 +33,8 @@ export interface ParseState {
   committedHtmlParts: string[];
   /** Set when mode === 'code-fence'. */
   codeFenceMeta: CodeFenceMeta | null;
+  /** Set when mode === 'custom-block'. The tag name being buffered (e.g. 'sources'). */
+  customBlockTag: string | null;
   /** Nesting depth for blockquotes / lists. */
   nestingDepth: number;
   /** Monotonically increasing; increments on each commit. */
@@ -71,6 +74,13 @@ export interface Plugin {
    * and may mutate it (add rules, etc.). Called once during renderer construction.
    */
   markdownItPlugins?: Array<(md: object) => void>;
+  /**
+   * HTML tag names this plugin treats as atomic block constructs.
+   * The splitter will buffer the entire <tag>...</tag> block before committing,
+   * preventing blank lines inside the block from triggering an early commit.
+   * Example: ['sources', 'artifacts']
+   */
+  customBlockTags?: string[];
 }
 
 export interface PluginHooks {
@@ -97,6 +107,12 @@ export interface PluginHooks {
 export interface RendererOptions {
   /** Plugins to apply. Order matters — hooks run in registration order. */
   plugins?: Plugin[];
+  /**
+   * Additional HTML tag names to treat as atomic block constructs.
+   * Same effect as `Plugin.customBlockTags` but declared inline on the renderer.
+   * Example: ['sources', 'artifacts', 'reasoning']
+   */
+  customBlockTags?: string[];
   /**
    * If the speculative buffer exceeds this many bytes, force-commit with
    * graceful degradation (auto-close unclosed code fences, etc.).

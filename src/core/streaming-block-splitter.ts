@@ -48,10 +48,29 @@ export class StreamingBlockSplitter {
   private readonly onCommit: CommitCallback;
   /** Current partial line that has no newline yet. */
   private linePending = '';
+  /** Regex that matches the opening of any registered custom block tag. */
+  private readonly customOpenRe: RegExp | null;
+  /** Map from tag name → closing regex, built once from customBlockTags. */
+  private readonly customCloseRe: Map<string, RegExp>;
 
-  constructor(onCommit: CommitCallback, bufferLimit = DEFAULT_BUFFER_LIMIT) {
+  constructor(onCommit: CommitCallback, bufferLimit = DEFAULT_BUFFER_LIMIT, customBlockTags: string[] = []) {
     this.onCommit = onCommit;
     this.bufferLimit = bufferLimit;
+
+    if (customBlockTags.length > 0) {
+      const escaped = customBlockTags.map((t) => escapeRegex(t)).join('|');
+      this.customOpenRe = new RegExp(`^<(${escaped})\\b[^>]*>`, 'i');
+      this.customCloseRe = new Map(
+        customBlockTags.map((t) => [
+          t.toLowerCase(),
+          new RegExp(`^<\\/${escapeRegex(t)}\\s*>`, 'i'),
+        ]),
+      );
+    } else {
+      this.customOpenRe = null;
+      this.customCloseRe = new Map();
+    }
+
     this.state = this.makeInitialState();
   }
 
@@ -61,6 +80,7 @@ export class StreamingBlockSplitter {
       speculativeBuffer: '',
       committedHtmlParts: [],
       codeFenceMeta: null,
+      customBlockTag: null,
       nestingDepth: 0,
       version: 0,
     };
@@ -109,6 +129,7 @@ export class StreamingBlockSplitter {
     this.linePending = '';
     this.state.mode = 'normal';
     this.state.codeFenceMeta = null;
+    this.state.customBlockTag = null;
   }
 
   /**
@@ -117,6 +138,7 @@ export class StreamingBlockSplitter {
   reset(): void {
     this.state = this.makeInitialState();
     this.linePending = '';
+    // customBlockTag is part of state, reset via makeInitialState — nothing extra needed
   }
 
   /**
@@ -194,6 +216,18 @@ export class StreamingBlockSplitter {
       return;
     }
 
+    // ---- Inside a custom block: only look for its closing tag ----
+    if (mode === 'custom-block') {
+      this.state.speculativeBuffer += line;
+      const closeRe = this.customCloseRe.get(this.state.customBlockTag ?? '');
+      if (closeRe?.test(trimmed)) {
+        this.commitBuffer();
+        this.state.mode = 'normal';
+        this.state.customBlockTag = null;
+      }
+      return;
+    }
+
     // ---- Blank line: commits most block types ----
     if (BLANK_LINE_RE.test(trimmed)) {
       if (mode !== 'normal') {
@@ -250,6 +284,20 @@ export class StreamingBlockSplitter {
       this.state.speculativeBuffer = line;
       this.state.mode = 'think-block';
       return;
+    }
+
+    // ---- Custom block opening (user-registered tags) ----
+    if (this.customOpenRe && mode !== 'blockquote' && mode !== 'list') {
+      const match = this.customOpenRe.exec(trimmed);
+      if (match) {
+        if (this.state.speculativeBuffer.trim()) {
+          this.commitBuffer();
+        }
+        this.state.speculativeBuffer = line;
+        this.state.mode = 'custom-block';
+        this.state.customBlockTag = match[1]!.toLowerCase();
+        return;
+      }
     }
 
     // ---- Blockquote ----
@@ -366,6 +414,11 @@ export class StreamingBlockSplitter {
       return raw + (needsNewline ? '\n' : '') + '</think>\n';
     }
 
+    if (mode === 'custom-block' && this.state.customBlockTag) {
+      const needsNewline = raw.length > 0 && !raw.endsWith('\n');
+      return raw + (needsNewline ? '\n' : '') + `</${this.state.customBlockTag}>\n`;
+    }
+
     if (raw.length > 0 && !raw.endsWith('\n')) {
       return raw + '\n';
     }
@@ -382,4 +435,8 @@ function isListItem(trimmed: string): boolean {
   if (/^[-*+]\s/.test(trimmed)) return true;
   if (/^\d+[.)]\s/.test(trimmed)) return true;
   return false;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

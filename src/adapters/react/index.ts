@@ -6,6 +6,6 @@ import '../../styles/auto-inject.js';
 export { AIMarkdown } from './AIMarkdown.js';
 export { useMarkdownStream } from './useMarkdownStream.js';
 export { MarkdownStream } from './MarkdownStream.js';
-export type { AIMarkdownProps } from './AIMarkdown.js';
+export type { AIMarkdownProps, MarkdownComponents } from './AIMarkdown.js';
 export type { UseMarkdownStreamOptions, UseMarkdownStreamReturn } from './useMarkdownStream.js';
 export type { MarkdownStreamProps } from './MarkdownStream.js';

@@ -73,6 +73,7 @@
     "lint": "publint"
   },
   "dependencies": {
+    "html-react-parser": "^5.2.17",
     "markdown-it": "^14.1.0"
   },
   "devDependencies": {
@@ -93,9 +94,17 @@
     "shiki": ">=1.0"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true },
-    "katex": { "optional": true },
-    "highlight.js": { "optional": true },
-    "shiki": { "optional": true }
+    "react": {
+      "optional": true
+    },
+    "katex": {
+      "optional": true
+    },
+    "highlight.js": {
+      "optional": true
+    },
+    "shiki": {
+      "optional": true
+    }
   }
 }
